@@ -1,7 +1,6 @@
 """Pull, clean, and save daily Treasury constant maturity yields from FRED."""
 
 import os
-from datetime import date
 
 import certifi
 import pandas as pd
@@ -64,7 +63,7 @@ def clean_yields(df: pd.DataFrame) -> pd.DataFrame:
 
 def load_treasury_yields(save: bool = True) -> pd.DataFrame:
     fred = get_fred_client()
-    start_date = date(date.today().year - YEARS_OF_HISTORY, date.today().month, date.today().day).isoformat()
+    start_date = (pd.Timestamp.today().normalize() - pd.DateOffset(years=YEARS_OF_HISTORY)).date().isoformat()
 
     raw = fetch_yields(fred, start_date)
     clean = clean_yields(raw)

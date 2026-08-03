@@ -69,6 +69,32 @@ def _orient_signs(loadings: pd.DataFrame, scores: pd.DataFrame) -> tuple[pd.Data
     return loadings, scores
 
 
+def _validate_factor_shapes(loadings: pd.DataFrame) -> None:
+    """Fail loudly if the PC-rank-based labels don't match their expected shape.
+
+    PCA only guarantees components are ordered by descending variance; it does
+    not guarantee PC1 looks like a level shift, PC2 like a slope, etc. That
+    correspondence is an empirical property of Treasury curves, not a
+    mathematical one, so if it ever breaks (different sample window, added
+    maturities) the level/slope/curvature labels would silently point at the
+    wrong loadings for every downstream consumer (attribution included).
+    """
+    level = loadings["level"]
+    if not ((level > 0).all() or (level < 0).all()):
+        raise ValueError(f"PC1 doesn't look like a level factor (loadings should share one sign): {level.to_dict()}")
+
+    slope = loadings["slope"]
+    diffs = slope.diff().dropna()
+    if not ((diffs >= 0).all() or (diffs <= 0).all()):
+        raise ValueError(f"PC2 doesn't look like a slope factor (loadings should be monotonic across maturities): {slope.to_dict()}")
+
+    curvature = loadings["curvature"]
+    wings = np.sign(curvature[["2Y", "30Y"]])
+    belly = np.sign(curvature[["5Y", "10Y"]])
+    if not ((wings == wings.iloc[0]).all() and (belly == belly.iloc[0]).all() and wings.iloc[0] != belly.iloc[0]):
+        raise ValueError(f"PC3 doesn't look like a curvature factor (wings should share one sign, belly the other): {curvature.to_dict()}")
+
+
 def fit_pca(changes: pd.DataFrame) -> tuple[PCA, pd.DataFrame, pd.DataFrame]:
     """Fit PCA on the covariance of daily yield changes (unstandardized, in bps).
 
@@ -82,6 +108,7 @@ def fit_pca(changes: pd.DataFrame) -> tuple[PCA, pd.DataFrame, pd.DataFrame]:
     scores_df = pd.DataFrame(scores, index=changes.index, columns=FACTOR_NAMES)
 
     loadings, scores_df = _orient_signs(loadings, scores_df)
+    _validate_factor_shapes(loadings)
 
     return pca, loadings, scores_df
 
