@@ -69,11 +69,40 @@ curve-strategy/
 ```
 
 ## Status
-- [ ] Data pipeline (FRED pull + cleaning)
-- [ ] PCA factor decomposition
+- [x] Data pipeline (FRED pull + cleaning)
+- [x] PCA factor decomposition
 - [ ] Signal construction
 - [ ] DV01-neutral position sizing
 - [ ] Backtest engine
 - [ ] PnL attribution
 - [ ] Run for both 2s10s and 5s30s, compare results
 - [ ] Charts + writeup
+
+## Progress Notes
+
+### Data pipeline (`src/data_loader.py`)
+Pulls daily 2Y/5Y/10Y/30Y Treasury constant maturity yields (FRED series
+DGS2/DGS5/DGS10/DGS30) via `fredapi`, forward-fills short gaps (e.g. single
+holidays), and drops any remaining incomplete rows. Currently configured for
+25 years of history (back to 2001), covering the GFC, the 2020 zero-rate
+period, and the 2022-23 hiking cycle. Output: `data/treasury_yields.csv`
+(6,521 rows, 2001-08-02 to 2026-07-30, no missing values).
+
+### PCA factor decomposition (`src/pca_factors.py`)
+PCA on daily yield changes (in bps, unstandardized covariance) recovers the
+expected level/slope/curvature structure:
+
+| Factor | Variance explained | Expected range |
+|---|---|---|
+| Level | 86.8% | 80-90% |
+| Slope | 10.8% | 5-10% |
+| Curvature | 1.9% | 2-5% |
+
+Level lands squarely in range; slope/curvature are marginally outside the
+textbook range, plausibly because the sample includes several large
+parallel-shift regimes (GFC, 2020 crash) that reinforce the level factor.
+Loadings confirm correct factor shapes: level loads positively and evenly
+across all maturities, slope is monotonic from 2Y to 30Y, and curvature
+shows the classic belly-vs-wings hump. Outputs: `data/pca_loadings.csv`,
+`data/pca_factor_scores.csv` (daily factor scores, used later for PnL
+attribution), `outputs/pca_factors.png`.
