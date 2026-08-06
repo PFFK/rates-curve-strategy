@@ -24,6 +24,11 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 OUTPUT_PATH = os.path.join(DATA_DIR, "treasury_yields.csv")
 YEARS_OF_HISTORY = 25
 
+# Moody's Seasoned Baa Corporate Bond Yield -- used as a credit-stress proxy
+# for the credit hedge overlay (src/credit_hedge.py).
+CREDIT_SERIES_ID = "DBAA"
+CREDIT_OUTPUT_PATH = os.path.join(DATA_DIR, "credit_spread.csv")
+
 
 def get_fred_client() -> Fred:
     load_dotenv()
@@ -76,5 +81,31 @@ def load_treasury_yields(save: bool = True) -> pd.DataFrame:
     return clean
 
 
+def load_credit_spread(save: bool = True) -> pd.DataFrame:
+    """Baa corporate bond yield minus 10Y Treasury yield, in bps.
+
+    Requires treasury_yields.csv to already exist (used for the 10Y leg).
+    """
+    fred = get_fred_client()
+    start_date = (pd.Timestamp.today().normalize() - pd.DateOffset(years=YEARS_OF_HISTORY)).date().isoformat()
+
+    baa = fred.get_series(CREDIT_SERIES_ID, observation_start=start_date)
+    baa_df = baa.to_frame(name="DBAA")
+    baa_df.index.name = "date"
+
+    yields = pd.read_csv(OUTPUT_PATH, index_col="date", parse_dates=True)
+    combined = baa_df.join(yields[["10Y"]], how="inner")
+    combined = clean_yields(combined)
+    combined["credit_spread_bps"] = (combined["DBAA"] - combined["10Y"]) * 100
+
+    if save:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        combined.to_csv(CREDIT_OUTPUT_PATH)
+        print(f"Saved {len(combined)} rows ({combined.index.min().date()} to {combined.index.max().date()}) to {CREDIT_OUTPUT_PATH}")
+
+    return combined
+
+
 if __name__ == "__main__":
     load_treasury_yields()
+    load_credit_spread()
