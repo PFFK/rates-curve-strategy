@@ -65,6 +65,15 @@ curvature) via PCA decomposition.
   from three regime shifts (2004-06, 2007-08, 2021-23); see Progress Notes
   for whether it actually helps and the important caveat on why
 
+### 7. Risk Controls: Max-Hold + Stop-Loss (extension, not in original spec)
+- Force-exit a trade after `max_hold_days` (default 252, matching the
+  z-score's own lookback window) regardless of z-score
+- Force-exit if cumulative realized PnL since entry drops below
+  `-stop_loss_dollars` (default $500k), regardless of z-score
+- A stop-loss alone whipsaws (see Progress Notes) -- fixed with a re-entry
+  cooldown requiring the z-score to retrace halfway back toward exit_z
+  before re-entering the same direction
+
 ## Project Structure (planned)
 ```
 curve-strategy/
@@ -77,6 +86,7 @@ curve-strategy/
 │   ├── positions.py       # DV01-neutral position sizing, banded rebalancing
 │   ├── backtest.py        # backtest engine, curve-only and combined w/ credit hedge
 │   ├── credit_hedge.py    # credit-stress hedge overlay (extension, see step 6)
+│   ├── risk_controls.py   # max-hold + stop-loss w/ cooldown (extension, see step 7)
 │   └── attribution.py     # PnL attribution by factor
 ├── notebooks/         # exploratory analysis (optional)
 ├── outputs/           # charts, results
@@ -92,6 +102,8 @@ curve-strategy/
 - [ ] PnL attribution
 - [x] Run for both 2s10s and 5s30s, compare results
 - [x] Credit hedge overlay (extension) + honest evaluation
+- [x] Risk controls: max-hold + stop-loss w/ cooldown (extension)
+- [ ] Combine risk controls + credit hedge overlay together
 - [ ] Charts + writeup
 
 ## Progress Notes
@@ -274,17 +286,66 @@ Whether it earns its keep going forward depends on how often a comparable
 credit event recurs and whether the z-score trigger catches it as cleanly
 next time, which this backtest cannot tell us.
 
+### Risk controls: max-hold + stop-loss (`src/risk_controls.py`) — extension beyond the original spec
+Direct response to Known Limitations item 1 below. `backtest.py`'s pipeline
+is three sequential passes (signal → positions → PnL), but a stop-loss
+needs to know today's realized dollar PnL to decide whether to exit
+tomorrow, which needs sizing, which needs to already be in the trade —
+so this module re-does all three steps as a single day-by-day walk instead
+of three passes. **Validated the merge first**: with both controls off, it
+reproduces `backtest.py`'s numbers exactly (max diff $0.000000) before
+trusting any new results with the controls on.
+
+First pass (max-hold=252 days, stop-loss=$500k, no cooldown) gave a mixed,
+partly negative result: 2s10s got *worse* (-$6.32M → -$6.60M) while 5s30s
+improved (-$1.81M → -$1.52M). Root cause, found by inspecting individual
+exits: **93-95% of stop-loss exits were immediately re-entering the same
+direction the very next trading day**, because the z-score doesn't know a
+stop just fired — if it's still past the entry threshold, the position
+just walks right back in. This doesn't reduce exposure to the secular move
+that triggered the stop at all, it just resets the loss counter to zero
+while paying an extra transaction-cost round-trip (costs nearly doubled:
+2s10s $163k→$296k, 5s30s $93k→$134k).
+
+Fixed with a re-entry cooldown: after a stop-loss, require the z-score to
+retrace at least halfway back toward exit_z before re-entering the *same*
+direction (the opposite direction is never blocked — that's a distinct new
+bet, not a continuation of the one that just got stopped out). This took
+immediate re-entries to zero and produced a clean improvement:
+
+| Pair | Baseline | + risk controls (w/ cooldown) | Sharpe | Max drawdown |
+|---|---|---|---|---|
+| 2s10s | -$6.32M | **-$4.61M** | -0.46 → -0.41 | -$7.15M → -$5.47M |
+| 5s30s | -$1.81M | **+$0.58M** | -0.14 → **+0.05** | -$3.40M → -$2.47M |
+
+Confirmed directly on the 2004-06 5s30s disaster trade: with the cooldown,
+the stop-loss fired in Nov 2004 and the position stayed locked out of
+re-entering until Dec 2005 — over a year sitting out most of the ongoing
+decline — instead of riding it the whole way down as in the baseline.
+`outputs/backtest_{pair}_with_risk_controls.png` shows the risk-controlled
+line sitting above baseline for the entire 25-year history in both pairs.
+2s10s is still a net loser even with controls; 5s30s is not.
+
+**Not yet done** (next session): combine this with the credit hedge
+overlay to see the full stack together, and reconsider whether the credit
+hedge's own stop-loss-equivalent (it doesn't have one yet) would help or
+hurt the same way the curve legs' did before the cooldown fix.
+
 ## Known Limitations / Future Work
 Consolidated from the notes above, so these don't get lost:
 
-1. **Core strategy loses money over 25 years**, driven by a handful of
+1. ~~**Core strategy loses money over 25 years**, driven by a handful of
    trades that coincide with secular Fed regime shifts (2004-06, 2007-08,
    2021-23), not by consistently poor day-to-day signal quality. A naive
    trailing-252-day z-score has no way to distinguish "extreme, about to
    revert" from "the start of a multi-year trend." Candidate fixes not yet
    tried: a max-hold cap, a stop-loss, or a regime/volatility filter that
    widens or disables entries when the trailing window itself looks
-   unstable.
+   unstable.~~ **Addressed**: max-hold + stop-loss-with-cooldown added in
+   `risk_controls.py` (see Progress Notes above). Meaningfully improves
+   both pairs; 2s10s is still a net loser, 5s30s flips to a small positive
+   Sharpe. A regime/volatility filter is still untried if further
+   improvement is wanted.
 2. **Credit hedge's entire value is one trade.** +$2.85M from the single
    2007-08 GFC activation vs. -$0.63M from the other 12 combined. This is
    an n=1 finding, not a validated edge — needs either a longer/different
@@ -306,3 +367,9 @@ Consolidated from the notes above, so these don't get lost:
 5. **PnL attribution (step 5) not yet built** — the PCA loadings/factor
    scores from step 1 exist but haven't been used to decompose the
    backtest PnL into level/slope/curvature contributions yet.
+6. **Risk controls and credit hedge haven't been combined.** Each extension
+   (steps 6 and 7) was validated separately against the curve-only
+   baseline; the full stack (curve + risk controls + credit hedge
+   together) hasn't been run, and the credit hedge itself still has no
+   stop-loss-equivalent, so it's untested against the same whipsaw failure
+   mode the curve legs had before the cooldown fix. Next up.
