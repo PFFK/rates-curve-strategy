@@ -44,7 +44,7 @@ def _orient_signs(loadings: pd.DataFrame, scores: pd.DataFrame) -> tuple[pd.Data
     PCA eigenvectors have arbitrary sign. Fix it so that:
     - level: rising factor score means yields broadly rose (avg loading > 0)
     - slope: rising factor score means the curve steepened (30Y loading > 2Y loading)
-    - curvature: rising factor score means the belly richened vs. the wings
+    - curvature: rising factor score means belly yields rose vs. the wings (belly cheapened)
       (5Y+10Y loadings > 0 on average)
     """
     loadings = loadings.copy()

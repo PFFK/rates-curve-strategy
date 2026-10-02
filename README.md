@@ -7,6 +7,56 @@ DV01-neutral to parallel yield curve shifts. Strategy performance is
 backtested and PnL is attributed to curve risk factors (level, slope,
 curvature) via PCA decomposition.
 
+## Results at a glance
+**The strategy as specified doesn't make money, and the attribution shows
+why.** The rest of this README is the step-by-step record; this section
+is the summary.
+
+1. **The baseline loses over 25 years** (2s10s -$6.32M, Sharpe -0.46;
+   5s30s -$1.81M, Sharpe -0.14). Most of the loss comes from a few trades
+   entered at the start of secular Fed regime shifts (2004-06, 2007-08,
+   2021-23), which a trailing 1-year z-score reads as "extreme" when they're
+   actually the start of a trend.
+2. **Risk controls and a credit hedge help, but the gain doesn't survive
+   scrutiny.** Stop-loss + max-hold (with a re-entry cooldown) plus a
+   credit-stress hedge lift 5s30s to +$2.81M (Sharpe 0.20). Remove the
+   hedge's single 2007-09 GFC activation and it's flat (-$0.05M).
+3. **The intended slope bet loses money everywhere.** PCA attribution
+   shows slope PnL negative in both pairs and in every regime. The 5s30s
+   trade's profits came from *unintended* curvature exposure (+$3.53M),
+   because DV01-neutral legs aren't factor-neutral.
+4. **Removing that side exposure confirms it.** A 3-leg trade sized to
+   zero level and curvature exposure (same signal, same slope exposure)
+   loses -$3.8M / -$4.4M (Sharpe -0.34 / -0.40); its slope PnL is
+   -$4.2M / -$4.0M, essentially unchanged from the 2-leg trade.
+5. **The curvature idea doesn't hold up out of sample.** A curvature
+   fly, with its rules [pre-registered](docs/curvature_preregistration.md)
+   before running it, earned Sharpe 0.63 before 2023 and 0.08 (+$52k) on the
+   2023-26 holdout: a technical pass of a deliberately weak bar, but
+   indistinguishable from zero. The variant closest to what actually made
+   money in the backtest failed outright (-$36k).
+
+| | 2s10s | 5s30s |
+|---|---|---|
+| Baseline (DV01-neutral, z-score) | -$6.32M / -0.46 | -$1.81M / -0.14 |
+| + risk controls | -$4.61M / -0.41 | +$0.58M / +0.05 |
+| + risk controls + credit hedge | -$2.39M / -0.17 | +$2.81M / +0.20 |
+| ...ex-GFC hedge activation | -$5.24M / -0.40 | -$0.05M / -0.00 |
+| Slope-only, 3 legs (2004-26) | -$3.84M / -0.34 | -$4.41M / -0.40 |
+
+*Net PnL / annualized Sharpe, $10k DV01 per leg, 0.5bp costs.*
+
+![Slope-only vs DV01-neutral](outputs/slope_only_vs_dv01_neutral.png)
+![Curvature test](outputs/curvature_test.png)
+
+**Takeaway:** a naive z-score mean-reversion on 2s10s/5s30s has no
+demonstrable edge in 2001-2026 Treasuries, and the apparent edges found
+along the way (a GFC tail hedge, a curvature side bet) look like
+small-sample luck once tested properly. Methodologically the useful parts
+are the exact PCA attribution, factor-neutral construction, and the
+discipline of pre-registering the follow-up hypothesis rather than
+mining the same 25 years for it.
+
 ## Goals
 - Demonstrate systematic signal construction, relative-value trade design,
   and PnL attribution methodology relevant to rates trading.
@@ -74,7 +124,7 @@ curvature) via PCA decomposition.
   cooldown requiring the z-score to retrace halfway back toward exit_z
   before re-entering the same direction
 
-## Project Structure (planned)
+## Project Structure
 ```
 curve-strategy/
 ├── README.md
@@ -87,7 +137,10 @@ curve-strategy/
 │   ├── backtest.py        # backtest engine, curve-only and combined w/ credit hedge
 │   ├── credit_hedge.py    # credit-stress hedge overlay (extension, see step 6)
 │   ├── risk_controls.py   # max-hold + stop-loss w/ cooldown (extension, see step 7)
+│   ├── full_stack.py      # risk controls + credit hedge combined
+│   ├── factor_trades.py   # PCA-factor-sized multi-leg trades: slope-only, curvature fly
 │   └── attribution.py     # PnL attribution by factor
+├── docs/              # curvature test pre-registration
 ├── notebooks/         # exploratory analysis (optional)
 ├── outputs/           # charts, results
 └── requirements.txt
@@ -99,12 +152,14 @@ curve-strategy/
 - [x] Signal construction
 - [x] DV01-neutral position sizing
 - [x] Backtest engine
-- [ ] PnL attribution
+- [x] PnL attribution
 - [x] Run for both 2s10s and 5s30s, compare results
 - [x] Credit hedge overlay (extension) + honest evaluation
 - [x] Risk controls: max-hold + stop-loss w/ cooldown (extension)
-- [ ] Combine risk controls + credit hedge overlay together
-- [ ] Charts + writeup
+- [x] Combine risk controls + credit hedge overlay together
+- [x] Factor-neutral (slope-only) construction
+- [x] Pre-registered curvature test on 2023+ holdout
+- [x] Charts + writeup
 
 ## Progress Notes
 
@@ -326,10 +381,134 @@ decline — instead of riding it the whole way down as in the baseline.
 line sitting above baseline for the entire 25-year history in both pairs.
 2s10s is still a net loser even with controls; 5s30s is not.
 
-**Not yet done** (next session): combine this with the credit hedge
-overlay to see the full stack together, and reconsider whether the credit
-hedge's own stop-loss-equivalent (it doesn't have one yet) would help or
-hurt the same way the curve legs' did before the cooldown fix.
+### Full stack (`src/full_stack.py`)
+Risk-controlled curve trade + credit hedge, run together. First, the
+credit hedge got the same day-by-day treatment as the curve legs
+(`credit_hedge.simulate_hedge`, validated to reproduce the original hedge
+exactly with the stop off) so it could take a stop-loss + cooldown.
+**It doesn't need one:** the hedge's worst single activation lost $342k,
+so a $500k stop never fires, and even a $250k stop fires once with no
+whipsaw. The hedge's ex-GFC losses are a slow bleed across many small
+activations (9 losers between -$51k and -$342k), not a tail a stop can cut.
+
+| Pair | Baseline | + risk controls | + risk controls + credit hedge | Full stack, ex-GFC hedge activation |
+|---|---|---|---|---|
+| 2s10s | -$6.32M (Sharpe -0.46) | -$4.61M (-0.41) | **-$2.39M (-0.17)** | -$5.24M (-0.40) |
+| 5s30s | -$1.81M (-0.14) | +$0.58M (+0.05) | **+$2.81M (+0.20)** | -$0.05M (-0.00) |
+
+The two extensions stack roughly additively (daily curve-vs-hedge PnL
+correlation is ~-0.07), but the last column is the honest read: take out
+the single 2007-09 hedge activation and the best variant, 5s30s, is flat
+over 25 years. The full stack's max drawdown is also *worse* than risk
+controls alone in both pairs: the hedge's gains lift the peak (the GFC
+payoff for 2s10s, the March-2020 activation for 5s30s) and its later
+give-back and bleeding then add to the curve losses (hedge -$1.87M of the
+2s10s drawdown from Dec 2008 to Feb 2026, -$2.04M of the 5s30s drawdown
+from Mar 2020 to Sep 2022). `outputs/backtest_{pair}_full_stack.png`.
+
+### PnL attribution (`src/attribution.py`)
+Each day's yield-change vector is decomposed exactly as dy = mu + L·f
+(4-maturity, 4-component PCA, so no approximation), and the position's
+gross PnL e·dy splits into f_k·(e·L_k) per factor, where e is the signed
+$ DV01 per maturity held from the prior close. Reconciles to backtest net
+PnL to the cent. The PCA was refit on the current yield data, since the
+committed factor scores pre-dated the data refresh in the backtest commit.
+
+| Pair (baseline) | Level | **Slope** | **Curvature** | Residual + drift | Costs | Total |
+|---|---|---|---|---|---|---|
+| 2s10s | +$1.40M | **-$4.84M** | **-$2.71M** | -$0.01M | -$0.16M | -$6.32M |
+| 5s30s | -$1.37M | **-$4.07M** | **+$3.53M** | +$0.19M | -$0.09M | -$1.81M |
+
+**The core finding: the slope bet, the one the strategy exists to make,
+loses money in both pairs and in every regime** (2001-06, 2007-09,
+2010-19, 2020-26 all negative for both). Whatever positive PnL the
+strategy has comes from exposures it didn't intend to take:
+
+- **DV01-neutral is not factor-neutral.** While in a trade, the average
+  curvature exposure is 0.94x the slope exposure for 2s10s and 1.25x for
+  5s30s. 5s30s is, by PCA, *more* of a curvature trade than a slope trade:
+  5Y loads +0.54 on curvature and 30Y -0.54, so a 5s30s steepener is also a
+  large short-belly bet.
+- **5s30s's curvature leg earned +$3.53M, positive in every regime** --
+  it's the only consistently positive line in either pair, and the reason
+  5s30s does better than 2s10s at all. For 2s10s the curvature exposure has
+  the opposite sign and loses (-$2.71M).
+- **Level exposure isn't zero either** (0.09-0.14x slope): equal DV01 on
+  each leg isn't the same as equal *PCA level* loading (2Y loads 0.45 on
+  level, 10Y 0.53), so the 2s10s trade carries a small residual
+  duration bet that happened to earn +$1.40M.
+
+The full-stack attribution tells the same story: risk controls shrink the
+slope losses (2s10s -$4.84M -> -$2.59M, 5s30s -$4.07M -> -$1.07M) by
+cutting the regime-shift trades short, but don't turn slope positive.
+Charts: `outputs/attribution_{pair}_{baseline,full_stack}.png`.
+
+**What this means for next steps:** the obvious temptation is to "trade
+the curvature instead", e.g. a 5s/30s-vs-belly butterfly. That would be a
+hypothesis *found by looking at this backtest*, so testing it on the same
+25 years would be in-sample by construction. If pursued, it needs to be
+specified up front and judged on the recent-years holdout, per the
+in-sample/out-of-sample plan above. Caveat on the attribution itself:
+the PCA loadings are fit on the full sample, which is fine for after-the-fact
+attribution but would be lookahead if they ever drove positions.
+
+### Slope-only construction (`src/factor_trades.py`)
+Same z-score signal, but legs sized in PCA factor space: three maturities,
+solved so exposure to level and curvature is zero and slope exposure
+equals the DV01-neutral trade's at every sizing date. Because these
+loadings now drive positions, they come from a **trailing 3-year PCA**
+(no lookahead), which limits the test to 2004-06-29 onward. The third leg
+was chosen on construction quality alone, before looking at any PnL:
+2s10s adds the 30Y, 5s30s adds the 2Y (the alternatives needed 2-4x the
+gross DV01 and left 4-16x more exposure to the unhedged 4th PC). Both
+constructions run through one simulator with identical conventions
+(re-size every 21 days, 0.5bp costs, 1-day lag), so construction is the
+only difference.
+
+| Pair | Construction | Net PnL | Sharpe | Level | Slope | Curvature |
+|---|---|---|---|---|---|---|
+| 2s10s | DV01-neutral | -$6.48M | -0.48 | +$1.28M | -$5.05M | -$2.57M |
+| 2s10s | slope-only | -$3.84M | -0.34 | +$0.32M | -$4.19M | +$0.16M |
+| 5s30s | DV01-neutral | -$1.59M | -0.13 | -$1.27M | -$3.50M | +$3.05M |
+| 5s30s | slope-only | -$4.41M | -0.40 | -$0.34M | -$3.99M | +$0.28M |
+
+The construction does what it should: curvature PnL drops from ~$3M to
+~$0.2M (the remainder is the gap between trailing and full-sample
+loadings). With it gone, the slope bet is all that's left, and it loses
+about $4M in both pairs. 2s10s improves only because it sheds a curvature
+exposure that happened to lose; 5s30s gets worse because it sheds the one
+that happened to win.
+
+One existing doc bug fixed along the way: `pca_factors._orient_signs`
+described a rising curvature score as the belly "richening"; with positive
+belly loadings it means belly yields rose, i.e. the belly cheapened. The
+code was right, only the comment was wrong.
+
+### Pre-registered curvature test (`src/factor_trades.py`, `docs/curvature_preregistration.md`)
+Rules were written down before the first run: a 2Y/5Y/30Y fly sized to
+$10k per unit curvature score and zero level/slope exposure (trailing
+PCA); **H1** trades mean-reversion of the fly spread (2x5Y - 2Y - 30Y)
+with the spec's unchanged z-score defaults; **H2** trades the 5s30s
+signal's implied curvature direction. Verdict = holdout (2023-01-01 to
+2026-08-04) net PnL > 0 and Sharpe > 0. No stops or hedge.
+
+| | Entries (holdout) | Pre-2023 | Holdout 2023-26 | Verdict |
+|---|---|---|---|---|
+| H1: fly mean-reversion | 38 (5) | +$2.58M, Sharpe 0.63 | +$0.05M, Sharpe 0.08 | pass (by the letter) |
+| H2: -1 x 5s30s signal | 29 (8) | +$3.52M, Sharpe 0.81 | -$0.04M, Sharpe -0.05 | fail |
+
+Both curves go flat almost exactly at the holdout boundary
+(`outputs/curvature_test.png`). H1 clears the pre-set bar, but the bar
+was deliberately minimal given only ~3.6 years: a Sharpe of 0.08 with a
+standard error of ~0.5 is no evidence of an edge. H2, the closest replica
+of what made money in the backtest, fails, even though its holdout was
+partly contaminated in its favor (the 2020-26 attribution bucket had
+already shown curvature gains). H1's pre-2023 Sharpe of 0.63 is worth a
+note: that signal had never been run on any period before, but the
+hypothesis came from curvature behavior over those same years, so it isn't
+independent confirmation. **Honest read: the curvature edge was a feature
+of 2004-2022, not something that carried forward.** The only clean test
+left is forward paper trading.
 
 ## Known Limitations / Future Work
 Consolidated from the notes above, so these don't get lost:
@@ -364,12 +543,21 @@ Consolidated from the notes above, so these don't get lost:
    pair) means a hard chronological split would leave too few trades per
    bucket to be meaningful. Plan on record: keep thresholds untouched, use
    a recent-years holdout only for final validation, not tuning.
-5. **PnL attribution (step 5) not yet built** — the PCA loadings/factor
-   scores from step 1 exist but haven't been used to decompose the
-   backtest PnL into level/slope/curvature contributions yet.
-6. **Risk controls and credit hedge haven't been combined.** Each extension
-   (steps 6 and 7) was validated separately against the curve-only
-   baseline; the full stack (curve + risk controls + credit hedge
-   together) hasn't been run, and the credit hedge itself still has no
-   stop-loss-equivalent, so it's untested against the same whipsaw failure
-   mode the curve legs had before the cooldown fix. Next up.
+5. **The intended slope bet loses money; the profitable piece is
+   unintended curvature exposure** (see PnL attribution). DV01-neutral
+   legs aren't PCA-factor-neutral. **Tested**: a slope-only 3-leg
+   construction confirms the slope bet loses ~$4M in both pairs, and the
+   pre-registered curvature fly is flat on the 2023-26 holdout.
+6. **Full stack is flat ex-GFC.** Combining risk controls with the credit
+   hedge gives 5s30s a +0.20 Sharpe, but without the hedge's single
+   2007-09 activation it's -$0.05M. The hedge doesn't benefit from a
+   stop-loss (worst activation -$342k vs. the $500k stop).
+7. **Holdout is short and not fully clean.** ~3.6 years, a handful of
+   trades, and the 2023-26 period had already been seen in aggregate via the
+   attribution. Forward paper trading of the pre-registered H1 rules is the
+   only remaining clean test.
+8. **Factor trades use calendar rebalancing** (every 21 days), not the
+   duration-drift band of `positions.py`, so their DV01-neutral benchmark
+   is re-run through the same simulator rather than compared against the
+   original backtest numbers directly (they differ slightly: e.g. 2s10s
+   -$6.48M from 2004 vs. -$6.32M from 2001).
