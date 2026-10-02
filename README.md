@@ -139,6 +139,7 @@ curve-strategy/
 │   ├── risk_controls.py   # max-hold + stop-loss w/ cooldown (extension, see step 7)
 │   ├── full_stack.py      # risk controls + credit hedge combined
 │   ├── factor_trades.py   # PCA-factor-sized multi-leg trades: slope-only, curvature fly
+│   ├── paper_trade.py     # forward paper trading of the pre-registered H1 fly
 │   └── attribution.py     # PnL attribution by factor
 ├── docs/              # curvature test pre-registration
 ├── notebooks/         # exploratory analysis (optional)
@@ -160,6 +161,7 @@ curve-strategy/
 - [x] Factor-neutral (slope-only) construction
 - [x] Pre-registered curvature test on 2023+ holdout
 - [x] Charts + writeup
+- [x] Forward paper trading of H1 (live since 2026-10-01)
 
 ## Progress Notes
 
@@ -510,6 +512,37 @@ independent confirmation. **Honest read: the curvature edge was a feature
 of 2004-2022, not something that carried forward.** The only clean test
 left is forward paper trading.
 
+### Forward paper trading of H1 (`src/paper_trade.py`)
+Live since the **2026-10-01 close**. A GitHub Actions job
+(`.github/workflows/paper_trade.yml`) runs every weekday evening, pulls
+fresh FRED yields, and appends any new trading days to
+`data/paper/h1_ledger.csv`, committing the result. The commit history is
+the timestamped, public record that each day's position was logged before
+its outcome was known.
+
+Safeguards:
+- **Frozen rules.** The live trade is built by the same function as the
+  backtest (`factor_trades.build_curvature_trade`). Every run first
+  recomputes H1 on the committed backtest data and refuses to trade unless
+  it reproduces the pre-registered result to the cent ($51,604.38 holdout,
+  $2,632,624.10 full sample). Package versions are pinned in
+  `requirements-lock.txt` for the same reason.
+- **Append-only ledger.** Past rows are never rewritten. If FRED revises a
+  past yield enough to change a ledgered position or leg size, it's logged
+  to `data/paper/revisions.log` and the ledger stands.
+- **Separate data.** Live yields go to `data/paper/yields_live.csv` from a
+  fixed 2001-08-06 start, so the backtest's committed data never moves.
+  (FRED's history matched the committed data exactly on all 6,522
+  overlapping days at go-live.)
+
+The go-live row is a "bootstrap": H1 was already short curvature
+(fly -37bp, z=+2.56), carried in from the backtest, and forward PnL counts
+from the next trading day. Check progress with
+`python -m src.paper_trade --report` or the job summary on each Actions run.
+Judging it: the same bar as the holdout (net PnL > 0, Sharpe > 0), and
+realistically it needs several years and several trades before it says
+much either way.
+
 ## Known Limitations / Future Work
 Consolidated from the notes above, so these don't get lost:
 
@@ -554,8 +587,8 @@ Consolidated from the notes above, so these don't get lost:
    stop-loss (worst activation -$342k vs. the $500k stop).
 7. **Holdout is short and not fully clean.** ~3.6 years, a handful of
    trades, and the 2023-26 period had already been seen in aggregate via the
-   attribution. Forward paper trading of the pre-registered H1 rules is the
-   only remaining clean test.
+   attribution. Forward paper trading of the pre-registered H1 rules, the
+   only remaining clean test, is now running (see above).
 8. **Factor trades use calendar rebalancing** (every 21 days), not the
    duration-drift band of `positions.py`, so their DV01-neutral benchmark
    is re-run through the same simulator rather than compared against the

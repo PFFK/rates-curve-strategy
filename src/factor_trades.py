@@ -264,28 +264,45 @@ def plot_curvature_test(trades: dict, outputs_dir: str = OUTPUT_DIR) -> None:
     plt.close(fig)
 
 
-def run_curvature_test(save: bool = True) -> dict:
-    from src.attribution import attribute_exposures
-    from src.backtest import compute_series_stats
-    from src.signal import build_signal, compute_zscore, generate_positions_mean_reversion, load_yields
+H1_LABEL = "H1: fly mean-reversion"
+H2_LABEL = "H2: -1 x 5s30s signal"
 
-    yields_df = load_yields()
-    loadings_by_date = rolling_loadings(yields_df)
-    start = min(loadings_by_date)
+
+def curvature_signals(yields_df: pd.DataFrame) -> dict[str, pd.Series]:
+    from src.signal import build_signal, compute_zscore, generate_positions_mean_reversion
+
+    return {
+        H1_LABEL: generate_positions_mean_reversion(compute_zscore(fly_spread(yields_df))),
+        H2_LABEL: -build_signal(yields_df, pair="5s30s")["position"],
+    }
+
+
+def build_curvature_trade(yields_df: pd.DataFrame, position: pd.Series, loadings_by_date: dict | None = None) -> pd.DataFrame:
+    """The pre-registered fly, for a given signal. Shared by the backtest and
+    paper_trade.py so the live rules can't drift from the tested ones.
+    """
+    if loadings_by_date is None:
+        loadings_by_date = rolling_loadings(yields_df)
 
     def curvature_fly(date):
         return solve_leg_exposures(loadings_by_date[date], CURVATURE_LEGS, "curvature", CURVATURE_TARGET_BETA)
 
-    signals = {
-        "H1: fly mean-reversion": generate_positions_mean_reversion(compute_zscore(fly_spread(yields_df))),
-        "H2: -1 x 5s30s signal": -build_signal(yields_df, pair="5s30s")["position"],
-    }
+    position = position.copy()
+    position[position.index < min(loadings_by_date)] = 0
+    return simulate_exposure_trade(yields_df, position, curvature_fly)
+
+
+def run_curvature_test(save: bool = True) -> dict:
+    from src.attribution import attribute_exposures
+    from src.backtest import compute_series_stats
+    from src.signal import load_yields
+
+    yields_df = load_yields()
+    loadings_by_date = rolling_loadings(yields_df)
 
     results, trades = {}, {}
-    for label, position in signals.items():
-        position = position.copy()
-        position[position.index < start] = 0
-        trade = simulate_exposure_trade(yields_df, position, curvature_fly)
+    for label, position in curvature_signals(yields_df).items():
+        trade = build_curvature_trade(yields_df, position, loadings_by_date)
         attribution = attribute_exposures(yields_df, held_exposures(trade), trade, label)
 
         prev = trade["position"].shift(1).fillna(0)

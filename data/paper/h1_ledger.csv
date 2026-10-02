@@ -1,0 +1,2 @@
+date,fly_bps,zscore,position,dv01_2Y,dv01_5Y,dv01_30Y,gross_pnl,transaction_cost,net_pnl,row_type,cumulative_pnl,recorded_at
+2026-10-01,-37.0000000000001,2.5616202993650634,-1,5488.337404225508,-7876.943205386641,3743.9502433071743,0.0,0.0,0.0,bootstrap,0.0,2026-10-02T20:59:27+00:00
