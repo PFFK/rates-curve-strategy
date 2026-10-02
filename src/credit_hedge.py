@@ -150,6 +150,101 @@ def compute_hedge_pnl(credit_df: pd.DataFrame, hedge_positions_df: pd.DataFrame)
     return result
 
 
+def simulate_hedge(
+    credit_df: pd.DataFrame,
+    zscore: pd.Series,
+    entry_z: float = DEFAULT_ENTRY_Z,
+    exit_z: float = DEFAULT_EXIT_Z,
+    target_dv01: float = DEFAULT_TARGET_DV01,
+    mismatch_threshold_years: float = DURATION_MISMATCH_THRESHOLD_YEARS,
+    transaction_cost_bps: float = DEFAULT_TRANSACTION_COST_BPS,
+    stop_loss_dollars: float | None = None,
+    stop_loss_reentry_cooldown: bool = True,
+) -> pd.DataFrame:
+    """Day-by-day hedge walk with an optional stop-loss, mirroring
+    risk_controls.simulate_curve_trade: a stop needs today's realized PnL to
+    decide tomorrow's state, so signal -> sizing -> PnL can't stay three
+    separate passes once it's on.
+
+    The cooldown is the one-sided version of the curve legs': after a stop,
+    the hedge can't re-activate until the credit z-score has retraced at
+    least halfway back toward exit_z. With stop_loss_dollars=None this
+    reproduces generate_hedge_signal -> build_hedge_positions ->
+    compute_hedge_pnl exactly.
+    """
+    idx = zscore.index
+    z = zscore.to_numpy()
+    dbaa = credit_df["DBAA"].reindex(idx).to_numpy()
+    d_spread_bps = credit_df["credit_spread_bps"].reindex(idx).diff().to_numpy()
+    n = len(idx)
+
+    active = np.zeros(n, dtype=int)
+    current_dv01 = np.zeros(n)
+    transaction_cost = np.zeros(n)
+    gross_pnl = np.zeros(n)
+    net_pnl = np.zeros(n)
+    exit_reason = np.full(n, None, dtype=object)
+
+    state = 0
+    cur_notional = 0.0
+    ref_dur = None
+    prev_dv01 = prev_cost = 0.0
+    trade_cum_pnl = 0.0
+    cost_rate = transaction_cost_bps / 10_000
+    unlock_z = None  # set after a stop-loss; re-activation blocked until z <= unlock_z
+
+    for i in range(n):
+        day_gross = state * prev_dv01 * d_spread_bps[i] if i > 0 and not np.isnan(d_spread_bps[i]) else 0.0
+        gross_pnl[i] = day_gross
+        net_pnl[i] = day_gross - prev_cost
+        if state:
+            trade_cum_pnl += net_pnl[i]
+
+        mod_dur = modified_duration(dbaa[i], CREDIT_ASSUMED_MATURITY_YEARS)
+        dv01_per_unit = mod_dur * 0.0001
+        prev_state = state
+
+        if np.isnan(z[i]):
+            state = 0
+        elif state == 0:
+            if unlock_z is not None and z[i] <= unlock_z:
+                unlock_z = None
+            if z[i] >= entry_z and unlock_z is None:
+                state = 1
+                trade_cum_pnl = 0.0
+        elif z[i] <= exit_z:
+            state, exit_reason[i] = 0, "reversion"
+        elif stop_loss_dollars is not None and trade_cum_pnl <= -stop_loss_dollars:
+            state, exit_reason[i] = 0, "stop_loss"
+            if stop_loss_reentry_cooldown:
+                unlock_z = z[i] / 2  # halfway back toward exit_z (0)
+
+        if state == 0:
+            if prev_state != 0:
+                transaction_cost[i] = cost_rate * cur_notional
+            cur_notional = 0.0
+            ref_dur = None
+        elif prev_state == 0 or abs(mod_dur - ref_dur) > mismatch_threshold_years:
+            new_notional = target_dv01 / dv01_per_unit
+            transaction_cost[i] = cost_rate * abs(new_notional - cur_notional)
+            cur_notional = new_notional
+            ref_dur = mod_dur
+
+        active[i] = state
+        current_dv01[i] = cur_notional * dv01_per_unit
+        prev_dv01, prev_cost = current_dv01[i], transaction_cost[i]
+
+    result = pd.DataFrame({
+        "gross_pnl": gross_pnl,
+        "transaction_cost": np.concatenate([[0.0], transaction_cost[:-1]]),
+        "net_pnl": net_pnl,
+        "hedge_active": active,
+        "exit_reason": exit_reason,
+    }, index=idx)
+    result["cumulative_pnl"] = result["net_pnl"].cumsum()
+    return result
+
+
 def build_credit_hedge(
     target_dv01: float = DEFAULT_TARGET_DV01,
     window: int = DEFAULT_WINDOW,
