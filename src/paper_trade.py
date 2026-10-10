@@ -53,6 +53,12 @@ FROZEN_H1_HOLDOUT_PNL = 51_604.38
 FROZEN_H1_FULL_PNL = 2_632_624.10
 
 LEG_COLS = [f"dv01_{m}" for m in CURVATURE_LEGS]
+# A row recorded more than this long after its date is labeled "late": its
+# position still follows the frozen rules, but its timestamp no longer shows
+# it was logged before the outcome (e.g. catch-up after failed runs). Covers
+# FRED's ~1-day publication lag plus a weekend.
+LATE_AFTER = pd.Timedelta(days=4)
+
 LEDGER_COLS = ["fly_bps", "zscore", "position", *LEG_COLS, "gross_pnl", "transaction_cost", "net_pnl"]
 
 
@@ -118,7 +124,8 @@ def update_ledger() -> pd.DataFrame:
     else:
         check_revisions(ledger, trade)
         new = trade.loc[trade.index > ledger.index[-1], LEDGER_COLS].copy()
-        new["row_type"] = "live"
+        now = pd.Timestamp(recorded_at).tz_localize(None)
+        new["row_type"] = np.where(now - new.index > LATE_AFTER, "late", "live")
         cumulative_start = ledger["cumulative_pnl"].iloc[-1]
 
     if new.empty:
@@ -144,9 +151,11 @@ def report() -> None:
     if ledger is None:
         print("No ledger yet; run `python -m src.paper_trade` first.")
         return
-    live = ledger[ledger["row_type"] == "live"]
+    live = ledger[ledger["row_type"] != "bootstrap"]
+    n_late = int((ledger["row_type"] == "late").sum())
     go_live = ledger.index[0].date()
-    print(f"H1 forward test: live since {go_live} close, {len(live)} trading day(s) of forward PnL")
+    print(f"H1 forward test: live since {go_live} close, {len(live)} trading day(s) of forward PnL"
+          + (f" ({n_late} recorded late, see row_type)" if n_late else ""))
     current = ledger.iloc[-1]
     print(f"  current position: {int(current['position']):+d} as of {ledger.index[-1].date()} "
           f"(fly {current['fly_bps']:.1f}bp, z={current['zscore']:.2f})")
