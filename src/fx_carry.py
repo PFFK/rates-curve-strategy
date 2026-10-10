@@ -95,6 +95,10 @@ def signal_rates(rates: pd.DataFrame) -> pd.DataFrame:
     Indexed by month-start of the month whose end it applies to.
     """
     monthly = rates.resample("MS").last()
+    # extend the index so the latest published month still lands on the
+    # month it applies to after the lag shift
+    extended = pd.date_range(monthly.index[0], periods=len(monthly) + RATE_LAG_MONTHS, freq="MS")
+    monthly = monthly.reindex(extended)
     return monthly.ffill(limit=MAX_RATE_CARRY_FORWARD_MONTHS).shift(RATE_LAG_MONTHS)
 
 
@@ -134,7 +138,8 @@ def simulate(spot: pd.DataFrame, rates: pd.DataFrame) -> pd.DataFrame:
     book = build_portfolio(spot, rates)
     days = spot.loc[book.index[0]:].index
     # each day earns on the book set at the most recent month-end strictly before it
-    held = book.reindex(days).shift(1).ffill()
+    # (whole-row fill, so a currency dropped from the ranking shows NaN, not a stale rate)
+    held = book.reindex(days, method="ffill").shift(1)
 
     spot_ret = spot[FOREIGN].reindex(days).pct_change()
     dt = days.to_series().diff().dt.days.to_numpy() / DAY_COUNT
@@ -199,7 +204,7 @@ def plot_fx_carry(daily: pd.DataFrame, outputs_dir: str = OUTPUT_DIR) -> None:
     if daily.index[-1] > pd.Timestamp(IN_SAMPLE_END):
         ax.axvspan(pd.Timestamp(IN_SAMPLE_END), daily.index[-1], color="gray", alpha=0.15, label="holdout (verdict)")
     ax.axhline(0, color="#888888", linewidth=0.8)
-    ax.set_ylabel("Cumulative return (% of $1 long / $1 short)")
+    ax.set_ylabel("Cumulative return (% of \\$1 long / \\$1 short)")
     ax.set_title("G10 FX carry: long 3 / short 3 by lagged 3M rate")
     ax.spines[["top", "right"]].set_visible(False)
     ax.grid(axis="y", color="#e5e5e5", linewidth=0.6)

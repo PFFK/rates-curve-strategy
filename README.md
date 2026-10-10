@@ -56,6 +56,18 @@ is the summary.
 ![Curvature test](outputs/curvature_test.png)
 ![H1 with carry](outputs/h1_carry.png)
 
+**Follow-on: G10 FX carry ([pre-registered](docs/fx_carry_preregistration.md)
+before any FX data was loaded).** Long the 3 highest-yielding / short the
+3 lowest-yielding G10 currencies, monthly. It **passed** its untouched
+2021-26 holdout: 2.19%/yr at 5.2% vol, Sharpe 0.42, max drawdown -10.3%.
+That's carry earned as the textbook says (+15.8% from rate differentials,
+spot roughly flat at -1.3%), but it's not strong evidence on its own:
+the Sharpe standard error over 5.75 years is about 0.4, and the
+in-sample record is one good era (2002-07, Sharpe 1.45) followed by 13
+flat-to-losing years (2007-20, Sharpe -0.09).
+
+![FX carry](outputs/fx_carry.png)
+
 **Takeaway:** a naive z-score mean-reversion on 2s10s/5s30s has no
 demonstrable edge in 2001-2026 Treasuries, and the apparent edges found
 along the way (a GFC tail hedge, a curvature side bet) look like
@@ -148,6 +160,7 @@ curve-strategy/
 │   ├── factor_trades.py   # PCA-factor-sized multi-leg trades: slope-only, curvature fly
 │   ├── paper_trade.py     # forward paper trading of the pre-registered H1 fly
 │   ├── carry.py           # carry + rolldown for the factor trades
+│   ├── fx_carry.py        # G10 FX carry, pre-registered, holdout-locked loader
 │   └── attribution.py     # PnL attribution by factor
 ├── docs/              # curvature test pre-registration
 ├── notebooks/         # exploratory analysis (optional)
@@ -171,6 +184,7 @@ curve-strategy/
 - [x] Charts + writeup
 - [x] Forward paper trading of H1 (live since 2026-10-01)
 - [x] Carry + rolldown realism layer
+- [x] G10 FX carry, pre-registered (holdout pass, Sharpe 0.42)
 
 ## Progress Notes
 
@@ -561,6 +575,48 @@ real implementation would earn, H1 loses money in the holdout, which
 settles the "is there something here" question more clearly than the
 pre-registered bar could. The paper-trading ledger still records price
 PnL only, matching the pre-registration.
+
+### G10 FX carry (`src/fx_carry.py`, `docs/fx_carry_preregistration.md`)
+A new asset class, chosen for a clean holdout after the Treasury data was
+spent. Timeline, all on the public commit history: pre-registration
+committed before any FX data was loaded (`d01093d`); code checked on
+2002-2020 only, then frozen and pushed (`aa991f6`); holdout unlocked once.
+
+Rules (all literature defaults): rank USD, EUR, JPY, GBP, CHF, CAD, AUD,
+NZD, NOK, SEK by the prior month's OECD 3-month interbank rate; long top 3,
+short bottom 3, equal-weighted, rebalanced at month-end (a USD slot is
+cash). Returns = spot vs. USD + rate differential (covered interest parity
+standing in for forward points), less 2bp per unit traded and 1bp/month
+for forward rolls. No overlays.
+
+| | Ann. return | Vol | Sharpe | Max DD | Worst month | Skew (monthly) | Spot / carry / costs |
+|---|---|---|---|---|---|---|---|
+| In-sample 2002-05 to 2020 | 2.05% | 8.74% | 0.24 | -36.4% | -10.4% (2008-10) | -0.53 | -19.8% / +63.8% / -4.5% |
+| **Holdout 2021 to 2026-10** | **2.19%** | 5.18% | **0.42** | -10.3% | -3.6% (2025-04) | -0.67 | -1.3% / +15.8% / -1.5% |
+
+**Verdict: pass** (holdout return > 0 and Sharpe > 0). How much it means:
+- The mechanism behaves as the theory says: the return is the rate
+  differential, while spot moves roughly cancel out in the holdout. The book
+  has the textbook shape (long AUD/NZD/NOK, short CHF/JPY), and the 2008
+  unwind shows up as a -27.5% crash from August to December 2008.
+- **Statistically weak.** Sharpe 0.42 over 5.75 years is about one standard
+  error from zero. Holdout years alternate: +5.3%, -4.1%, -0.3%, +6.3%,
+  -1.6%, +7.4% (2026 to date).
+- **Regime-dependent.** In-sample splits into 2002-mid-2007 (+50.8%,
+  Sharpe 1.45) and mid-2007 to 2020 (-11.3%, Sharpe -0.09). Carry works
+  when interest rates differ meaningfully across countries; the zero-rate
+  years compressed those differences. The holdout coincides with their
+  return after 2022.
+- **Crash risk is real:** negative skew in both periods, and the 2008
+  drawdown (-36%) is far worse than anything in the holdout.
+
+Two bugs found and fixed after the unlock, both making the code match the
+written rules rather than changing them: (1) the latest published rate
+month was dropped by the lag shift, skipping the 2026-09 rebalance; it
+produced the same book, so only 2026-10-01/02 changed, by the cost of
+the rebalance; (2) a display-only fill showed stale rates for currencies
+already dropped from the ranking (zero weight, no PnL effect). Headline
+numbers are unchanged to two decimals.
 
 ### Forward paper trading of H1 (`src/paper_trade.py`)
 Live since the **2026-10-01 close**. A GitHub Actions job
