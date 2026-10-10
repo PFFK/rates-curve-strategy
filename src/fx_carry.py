@@ -117,10 +117,18 @@ def book_row(sig: pd.DataFrame, month_end: pd.Timestamp) -> pd.Series | None:
     r = sig.loc[key].dropna()
     if len(r) < N_LONG + N_SHORT or "USD" not in r:
         return None
-    ranked = r.sort_values(ascending=False).index
+    # Ties at a cutoff split that slot's weight equally among the tied
+    # currencies (amendment, docs/fx_carry_preregistration.md): an ordinary
+    # sort breaks ties arbitrarily, and differently on macOS vs. Linux.
+    ranked = r.sort_values(ascending=False)
+    long_cut, short_cut = ranked.iloc[N_LONG - 1], ranked.iloc[-N_SHORT]
+    if long_cut <= short_cut:
+        return None  # ties span both cutoffs; no unambiguous ranking
     w = pd.Series(0.0, index=CURRENCIES)
-    w[ranked[:N_LONG]] = 1 / N_LONG
-    w[ranked[-N_SHORT:]] = -1 / N_SHORT
+    for cut, n, sign, beyond in [(long_cut, N_LONG, 1, r > long_cut), (short_cut, N_SHORT, -1, r < short_cut)]:
+        tied = r.index[r == cut]
+        w[r.index[beyond]] = sign / n
+        w[tied] = sign * (n - beyond.sum()) / n / len(tied)
     return pd.concat([w.rename(lambda c: f"w_{c}"), sig.loc[key].rename(lambda c: f"rate_{c}")]).rename(month_end)
 
 

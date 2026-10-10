@@ -73,3 +73,26 @@ paying carry; this trade collects it, with known crash risk.
 - **The idea isn't new to anyone:** carry's long-run premium is
   well documented, so a pass would confirm a known effect on recent data,
   not discover one.
+
+---
+
+## Amendment 1 (2026-10-10): tie-breaking at the cutoffs
+*Added after the holdout run; the rules above are unchanged.*
+
+**Gap:** the rules didn't say how to rank currencies with exactly equal
+rates. The implementation used an ordinary sort, which breaks ties
+arbitrarily, and differently on macOS (where the holdout was run) and on
+Linux (GitHub Actions). The paper trader's frozen-rules check caught this
+when the two platforms produced different results from identical code and
+data. Seven month-ends since 2002 have a tie at a cutoff, one of them in
+the holdout (2025-02-28, USD and AUD both 4.33%).
+
+**Rule added:** when currencies tie at the long or short cutoff, that
+slot's weight is split equally among them (e.g. USD and AUD at 1/6 each
+instead of one at 1/3). This picks no winner and is platform-independent.
+If ties ever span both cutoffs, no ranking is formed that month and the
+previous book carries over.
+
+**Effect on the verdict:** none. Holdout net return under macOS's tie order
+13.02%, Linux's 13.14%, the split rule 13.08% (2.20%/yr, Sharpe 0.42).
+Pass under all three.

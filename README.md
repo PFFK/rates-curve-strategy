@@ -59,9 +59,9 @@ is the summary.
 **Follow-on: G10 FX carry ([pre-registered](docs/fx_carry_preregistration.md)
 before any FX data was loaded).** Long the 3 highest-yielding / short the
 3 lowest-yielding G10 currencies, monthly. It **passed** its untouched
-2021-26 holdout: 2.19%/yr at 5.2% vol, Sharpe 0.42, max drawdown -10.3%.
+2021-26 holdout: 2.20%/yr at 5.2% vol, Sharpe 0.42, max drawdown -10.3%.
 That's carry earned as the textbook says (+15.8% from rate differentials,
-spot roughly flat at -1.3%), but it's not strong evidence on its own:
+spot roughly flat at -1.2%), but it's not strong evidence on its own:
 the Sharpe standard error over 5.75 years is about 0.4, and the
 in-sample record is one good era (2002-07, Sharpe 1.45) followed by 13
 flat-to-losing years (2007-20, Sharpe -0.09).
@@ -593,8 +593,8 @@ for forward rolls. No overlays.
 
 | | Ann. return | Vol | Sharpe | Max DD | Worst month | Skew (monthly) | Spot / carry / costs |
 |---|---|---|---|---|---|---|---|
-| In-sample 2002-05 to 2020 | 2.05% | 8.74% | 0.24 | -36.4% | -10.4% (2008-10) | -0.53 | -19.8% / +63.8% / -4.5% |
-| **Holdout 2021 to 2026-10** | **2.19%** | 5.18% | **0.42** | -10.3% | -3.6% (2025-04) | -0.67 | -1.3% / +15.8% / -1.5% |
+| In-sample 2002-05 to 2020 | 1.98% | 8.76% | 0.23 | -36.4% | -10.4% (2008-10) | -0.52 | -21.2% / +63.8% / -4.5% |
+| **Holdout 2021 to 2026-10** | **2.20%** | 5.19% | **0.42** | -10.3% | -3.6% (2025-04) | -0.68 | -1.2% / +15.8% / -1.5% |
 
 **Verdict: pass** (holdout return > 0 and Sharpe > 0). How much it means:
 - The mechanism behaves as the theory says: the return is the rate
@@ -619,6 +619,16 @@ produced the same book, so only 2026-10-01/02 changed, by the cost of
 the rebalance; (2) a display-only fill showed stale rates for currencies
 already dropped from the ranking (zero weight, no PnL effect). Headline
 numbers are unchanged to two decimals.
+
+**Amendment 1, tie-breaking** (found when going live; see the
+pre-registration file): the rules never said how to rank currencies with
+exactly equal rates, and an ordinary sort breaks ties differently on macOS
+and Linux. The paper trader's frozen-rules check failed on GitHub's Linux
+runner because of it. Seven month-ends since 2002 have a tie at a cutoff,
+one in the holdout (2025-02, USD and AUD both 4.33%). The added rule splits
+the weight equally among tied currencies. The table above uses it; the
+holdout passes under macOS's order (13.02% net), Linux's (13.14%), and
+the split (13.08%), so the verdict doesn't depend on it.
 
 ### Forward paper trading of FX carry (`src/fx_paper_trade.py`)
 Live since **2026-10-10** (UTC), in the same nightly GitHub Actions job as

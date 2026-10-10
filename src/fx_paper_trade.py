@@ -50,9 +50,10 @@ BOOKS_PATH = os.path.join(PAPER_DIR, "fx_books.csv")
 LEDGER_PATH = os.path.join(PAPER_DIR, "fx_ledger.csv")
 REVISIONS_LOG = os.path.join(PAPER_DIR, "revisions.log")
 
-# Net return sums of the pre-registered run on the committed data/fx/ files.
-FROZEN_IN_SAMPLE_NET = 0.395497482802
-FROZEN_HOLDOUT_NET = 0.130238229481
+# Net return sums of the pre-registered rules (with Amendment 1's tie
+# split) on the committed data/fx/ files.
+FROZEN_IN_SAMPLE_NET = 0.381138851808
+FROZEN_HOLDOUT_NET = 0.130821342963
 
 # Weekend plus the few hours GitHub's scheduler tends to run late.
 LATE_AFTER = pd.Timedelta(days=4)
