@@ -161,6 +161,7 @@ curve-strategy/
 │   ├── paper_trade.py     # forward paper trading of the pre-registered H1 fly
 │   ├── carry.py           # carry + rolldown for the factor trades
 │   ├── fx_carry.py        # G10 FX carry, pre-registered, holdout-locked loader
+│   ├── fx_paper_trade.py  # forward paper trading of FX carry
 │   └── attribution.py     # PnL attribution by factor
 ├── docs/              # curvature test pre-registration
 ├── notebooks/         # exploratory analysis (optional)
@@ -185,6 +186,7 @@ curve-strategy/
 - [x] Forward paper trading of H1 (live since 2026-10-01)
 - [x] Carry + rolldown realism layer
 - [x] G10 FX carry, pre-registered (holdout pass, Sharpe 0.42)
+- [x] Forward paper trading of FX carry (live since 2026-10-10)
 
 ## Progress Notes
 
@@ -617,6 +619,35 @@ produced the same book, so only 2026-10-01/02 changed, by the cost of
 the rebalance; (2) a display-only fill showed stale rates for currencies
 already dropped from the ranking (zero weight, no PnL effect). Headline
 numbers are unchanged to two decimals.
+
+### Forward paper trading of FX carry (`src/fx_paper_trade.py`)
+Live since **2026-10-10** (UTC), in the same nightly GitHub Actions job as
+H1. It runs the frozen pre-registered rules unchanged, including the
+stale-rate rule: at go-live the OECD euro and sterling series end in
+January 2026, so EUR and GBP sit out of the ranking until they're updated.
+Swapping in a fresher rate source would make it a different test.
+
+What gets timestamped differs from H1. FRED's daily FX rates come from
+the weekly H.10 release, so price rows always arrive days late, but daily
+PnL follows mechanically once the month's book is set. The decision is the
+book, so:
+- **Books** (`data/paper/fx_books.csv`): each calendar month-end, the
+  first run afterward ranks the currencies on the rates published *at
+  that moment* and records the book. A book recorded more than 4 days
+  after its month-end is labeled `late`.
+- **Daily PnL** (`data/paper/fx_ledger.csv`): every day after go-live is
+  priced off the recorded books, never recomputed ones, as H.10 prices
+  arrive.
+
+Same safeguards as H1: a frozen-rules check (recomputes the in-sample and
+holdout net returns on the committed `data/fx/` files to 1e-9 before
+trading), append-only files, and spot revisions to already-ledgered days
+logged to `data/paper/revisions.log`. Tested on simulated months before
+go-live: recorded books matched the backtest's books exactly, ledger PnL
+matched a direct recompute to 1e-16, the month-end handover lands on the
+right day, and weekend month-ends and price-data lag are handled.
+
+Starting book (2026-09-30): long USD, AUD, NOK; short JPY, CHF, SEK.
 
 ### Forward paper trading of H1 (`src/paper_trade.py`)
 Live since the **2026-10-01 close**. A GitHub Actions job

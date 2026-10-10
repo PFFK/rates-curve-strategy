@@ -55,24 +55,29 @@ DAY_COUNT = 360
 TRADING_DAYS_PER_YEAR = 252
 
 
-def fetch_fx_data() -> None:
-    """Download full spot and rate history to data/fx/. Prints coverage
-    only; no returns or statistics, so the holdout stays unseen.
-    """
+def fetch_fx_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Full spot (USD per unit of foreign currency) and monthly rate history from FRED."""
     from src.data_loader import get_fred_client
 
     fred = get_fred_client()
     spot = {}
     for ccy, (sid, invert) in SPOT_SERIES.items():
         s = fred.get_series(sid, observation_start=FETCH_START)
-        spot[ccy] = 1 / s if invert else s  # USD per unit of foreign currency
+        spot[ccy] = 1 / s if invert else s
     spot_df = pd.DataFrame(spot).ffill(limit=5).dropna(how="all")
     spot_df.index.name = "date"
 
     rates = {ccy: fred.get_series(f"IR3TIB01{c}M156N", observation_start=FETCH_START) for ccy, c in RATE_COUNTRY.items()}
     rates_df = pd.DataFrame(rates)
     rates_df.index.name = "month"
+    return spot_df, rates_df
 
+
+def fetch_fx_data() -> None:
+    """Download full spot and rate history to data/fx/. Prints coverage
+    only; no returns or statistics, so the holdout stays unseen.
+    """
+    spot_df, rates_df = fetch_fx_frames()
     os.makedirs(FX_DIR, exist_ok=True)
     spot_df.to_csv(SPOT_PATH)
     rates_df.to_csv(RATES_PATH)
@@ -102,6 +107,23 @@ def signal_rates(rates: pd.DataFrame) -> pd.DataFrame:
     return monthly.ffill(limit=MAX_RATE_CARRY_FORWARD_MONTHS).shift(RATE_LAG_MONTHS)
 
 
+def book_row(sig: pd.DataFrame, month_end: pd.Timestamp) -> pd.Series | None:
+    """The book set at month_end from signal_rates output, or None if the
+    ranking can't be formed (no lagged USD rate, or fewer than 6 currencies).
+    """
+    key = month_end.to_period("M").to_timestamp()
+    if key not in sig.index:
+        return None
+    r = sig.loc[key].dropna()
+    if len(r) < N_LONG + N_SHORT or "USD" not in r:
+        return None
+    ranked = r.sort_values(ascending=False).index
+    w = pd.Series(0.0, index=CURRENCIES)
+    w[ranked[:N_LONG]] = 1 / N_LONG
+    w[ranked[-N_SHORT:]] = -1 / N_SHORT
+    return pd.concat([w.rename(lambda c: f"w_{c}"), sig.loc[key].rename(lambda c: f"rate_{c}")]).rename(month_end)
+
+
 def build_portfolio(spot: pd.DataFrame, rates: pd.DataFrame) -> pd.DataFrame:
     """Daily weights (set at month-end closes, effective the next day) and
     the lagged rates they were ranked on.
@@ -116,30 +138,27 @@ def build_portfolio(spot: pd.DataFrame, rates: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("no month has all 10 lagged rates")
     month_ends = month_ends[month_ends.to_period("M").to_timestamp() >= complete[0]]
 
-    rows = []
-    for d in month_ends:
-        key = d.to_period("M").to_timestamp()
-        if key not in sig.index:
-            continue
-        r = sig.loc[key].dropna()
-        if len(r) < N_LONG + N_SHORT or "USD" not in r:
-            continue
-        ranked = r.sort_values(ascending=False).index
-        w = pd.Series(0.0, index=CURRENCIES)
-        w[ranked[:N_LONG]] = 1 / N_LONG
-        w[ranked[-N_SHORT:]] = -1 / N_SHORT
-        rows.append(pd.concat([w.rename(lambda c: f"w_{c}"), sig.loc[key].rename(lambda c: f"rate_{c}")]).rename(d))
+    rows = [row for d in month_ends if (row := book_row(sig, d)) is not None]
     if not rows:
         raise ValueError("no month-end has a full set of lagged rates")
     return pd.DataFrame(rows)
 
 
 def simulate(spot: pd.DataFrame, rates: pd.DataFrame) -> pd.DataFrame:
-    book = build_portfolio(spot, rates)
+    return pnl_from_book(spot, build_portfolio(spot, rates))
+
+
+def pnl_from_book(spot: pd.DataFrame, book: pd.DataFrame) -> pd.DataFrame:
+    """Daily PnL for a sequence of month-end books (indexed by the date each
+    was set). Each day earns on the latest book dated strictly before it,
+    so a book dated on a weekend or holiday works too (fx_paper_trade.py
+    records books by calendar month-end).
+    """
     days = spot.loc[book.index[0]:].index
-    # each day earns on the book set at the most recent month-end strictly before it
-    # (whole-row fill, so a currency dropped from the ranking shows NaN, not a stale rate)
-    held = book.reindex(days, method="ffill").shift(1)
+    # position of the book in force on each day: latest book date < day
+    slot = book.index.searchsorted(days, side="left") - 1
+    held = book.iloc[np.clip(slot, 0, None)].set_axis(days)
+    held[slot < 0] = np.nan
 
     spot_ret = spot[FOREIGN].reindex(days).pct_change()
     dt = days.to_series().diff().dt.days.to_numpy() / DAY_COUNT
@@ -156,7 +175,10 @@ def simulate(spot: pd.DataFrame, rates: pd.DataFrame) -> pd.DataFrame:
     turnover.iloc[0] = weights.iloc[0].abs().sum()
     gross = weights[[f"w_{c}" for c in FOREIGN]].abs().sum(axis=1)
     cost_at_rebalance = (TRADE_COST_BPS * turnover + ROLL_COST_BPS_PER_MONTH * gross) / 10_000
-    cost = cost_at_rebalance.reindex(days).shift(1).fillna(0.0).to_numpy()
+    first_day = days.searchsorted(book.index, side="right")
+    cost = np.zeros(len(days))
+    keep = first_day < len(days)
+    np.add.at(cost, first_day[keep], cost_at_rebalance.to_numpy()[keep])
 
     out = pd.DataFrame({"spot": spot_pnl, "carry": carry_pnl, "cost": -cost}, index=days)
     out.iloc[0] = 0.0

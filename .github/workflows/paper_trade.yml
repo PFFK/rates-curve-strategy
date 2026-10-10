@@ -1,8 +1,9 @@
-# Forward paper trading of the pre-registered H1 curvature fly
-# (src/paper_trade.py). Each run appends new trading days to
-# data/paper/h1_ledger.csv and commits it, so the git history timestamps
-# every decision before its outcome is known.
-name: H1 paper trade
+# Forward paper trading of the pre-registered strategies:
+# - H1 curvature fly (src/paper_trade.py) -> data/paper/h1_ledger.csv
+# - G10 FX carry (src/fx_paper_trade.py) -> data/paper/fx_books.csv, fx_ledger.csv
+# Each run commits what it appended, so the git history timestamps every
+# decision before its outcome is known.
+name: Paper trade
 
 on:
   schedule:
@@ -28,19 +29,35 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-lock.txt
 
-      # Pinned to the versions the backtest was run with, so a library
-      # upgrade can't shift the numbers and trip the frozen-rules check.
+      # Pinned to the versions the backtests were run with, so a library
+      # upgrade can't shift the numbers and trip the frozen-rules checks.
       - run: pip install -r requirements-lock.txt
 
-      - name: Update ledger
+      # Each strategy runs independently: one failing doesn't block the
+      # other's update, but the final step still fails the job so it's noticed.
+      - name: Update H1 ledger
+        id: h1
+        continue-on-error: true
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
         run: python -m src.paper_trade
 
-      - name: Report
-        run: python -m src.paper_trade --report >> "$GITHUB_STEP_SUMMARY"
+      - name: Update FX carry books and ledger
+        id: fx
+        continue-on-error: true
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: python -m src.fx_paper_trade
 
-      - name: Commit ledger
+      - name: Report
+        if: always()
+        run: |
+          python -m src.paper_trade --report >> "$GITHUB_STEP_SUMMARY"
+          echo >> "$GITHUB_STEP_SUMMARY"
+          python -m src.fx_paper_trade --report >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit ledgers
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -48,6 +65,12 @@ jobs:
           if git diff --cached --quiet; then
             echo "No ledger changes."
           else
-            git commit -m "Paper trade: H1 ledger through $(tail -1 data/paper/h1_ledger.csv | cut -d, -f1)"
+            git commit -m "Paper trade: ledgers updated $(date -u +%Y-%m-%d)"
             git push
           fi
+
+      - name: Fail if any strategy update failed
+        if: steps.h1.outcome == 'failure' || steps.fx.outcome == 'failure'
+        run: |
+          echo "H1: ${{ steps.h1.outcome }}, FX: ${{ steps.fx.outcome }}"
+          exit 1
