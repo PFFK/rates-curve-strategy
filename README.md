@@ -35,6 +35,12 @@ is the summary.
    2023-26 holdout: a technical pass of a deliberately weak bar, but
    indistinguishable from zero. The variant closest to what actually made
    money in the backtest failed outright (-$36k).
+6. **Counting the cost of holding the trade sinks it.** Adding carry and
+   rolldown (what a real position earns or pays just by being held) cuts
+   H1's full-sample Sharpe from 0.55 to 0.22 and turns its holdout to
+   -$262k (Sharpe -0.38). Fading an extreme curve shape means paying the
+   carry that extreme shape offers: H1 pays it on ~70% of days held, in
+   both directions.
 
 | | 2s10s | 5s30s |
 |---|---|---|
@@ -48,6 +54,7 @@ is the summary.
 
 ![Slope-only vs DV01-neutral](outputs/slope_only_vs_dv01_neutral.png)
 ![Curvature test](outputs/curvature_test.png)
+![H1 with carry](outputs/h1_carry.png)
 
 **Takeaway:** a naive z-score mean-reversion on 2s10s/5s30s has no
 demonstrable edge in 2001-2026 Treasuries, and the apparent edges found
@@ -140,6 +147,7 @@ curve-strategy/
 │   ├── full_stack.py      # risk controls + credit hedge combined
 │   ├── factor_trades.py   # PCA-factor-sized multi-leg trades: slope-only, curvature fly
 │   ├── paper_trade.py     # forward paper trading of the pre-registered H1 fly
+│   ├── carry.py           # carry + rolldown for the factor trades
 │   └── attribution.py     # PnL attribution by factor
 ├── docs/              # curvature test pre-registration
 ├── notebooks/         # exploratory analysis (optional)
@@ -162,6 +170,7 @@ curve-strategy/
 - [x] Pre-registered curvature test on 2023+ holdout
 - [x] Charts + writeup
 - [x] Forward paper trading of H1 (live since 2026-10-01)
+- [x] Carry + rolldown realism layer
 
 ## Progress Notes
 
@@ -512,6 +521,47 @@ independent confirmation. **Honest read: the curvature edge was a feature
 of 2004-2022, not something that carried forward.** The only clean test
 left is forward paper trading.
 
+### Carry and rolldown (`src/carry.py`)
+The backtests price trades off daily changes in constant-maturity yields,
+which misses the PnL of simply holding bonds: **carry** (earn the yield,
+pay the financing rate on the cash borrowed) and **rolldown** (a bond held
+a day is a day shorter, so on an unchanged curve its yield slides along
+the curve). Positions are unchanged; this only adds those two terms, from
+the previous close's holdings, accruing over calendar days. Financing is
+effective fed funds (DFF; SOFR only starts in 2018); local slope is linear
+to the next shorter CMT point (1Y/3Y/7Y/20Y, from a separate
+`data/carry_inputs.csv` so the backtest data doesn't move). Hand-checked
+on $100M long 10Y through 2015: carry and rolldown match a by-hand
+calculation within 0.2%.
+
+| Trade | Price PnL (Sharpe) | Carry | Rolldown | With carry (Sharpe) |
+|---|---|---|---|---|
+| 2s10s DV01-neutral | -$6.48M (-0.48) | +$2.03M | +$0.84M | -$3.61M (-0.27) |
+| 2s10s slope-only | -$3.84M (-0.34) | +$1.49M | +$0.33M | -$2.01M (-0.18) |
+| 5s30s DV01-neutral | -$1.59M (-0.13) | +$1.04M | -$0.10M | -$0.64M (-0.05) |
+| 5s30s slope-only | -$4.41M (-0.40) | +$2.08M | +$1.36M | -$0.97M (-0.09) |
+| H1, full sample | +$2.63M (0.55) | -$0.52M | -$1.04M | +$1.07M (0.22) |
+| **H1, holdout 2023-26** | +$0.05M (0.08) | -$0.06M | -$0.25M | **-$0.26M (-0.38)** |
+| H2, holdout 2023-26 | -$0.04M (-0.05) | -$0.15M | -$0.30M | -$0.48M (-0.68) |
+
+Two opposite stories:
+- **The slope trades earn carry** and lose less once it's counted, but
+  stay negative everywhere.
+- **The curvature trades pay carry.** H1 pays carry + rolldown on ~70%
+  of the days it's in a trade, long *and* short (-$406/day on average, vs.
+  a +$710/day price edge over the full sample). It enters when the fly is
+  at an extreme, and an extreme curve shape is precisely the one the
+  market pays you to hold; fading it means paying that. Over 2004-22 the
+  price reversion outran the cost; in the holdout the reversion
+  disappeared and only the cost remained.
+
+**Effect on the verdict:** the pre-registered H1 verdict was defined on
+price PnL and stays as recorded (a technical pass). But on the basis a
+real implementation would earn, H1 loses money in the holdout, which
+settles the "is there something here" question more clearly than the
+pre-registered bar could. The paper-trading ledger still records price
+PnL only, matching the pre-registration.
+
 ### Forward paper trading of H1 (`src/paper_trade.py`)
 Live since the **2026-10-01 close**. A GitHub Actions job
 (`.github/workflows/paper_trade.yml`) runs every weekday evening, pulls
@@ -594,3 +644,8 @@ Consolidated from the notes above, so these don't get lost:
    is re-run through the same simulator rather than compared against the
    original backtest numbers directly (they differ slightly: e.g. 2s10s
    -$6.48M from 2004 vs. -$6.32M from 2001).
+9. **Carry model is approximate.** Fed funds as the repo rate, no
+   specialness on short legs, linear local slope (overstates front-end
+   rolldown), and a constantly-rolled CMT bond rather than a specific
+   aging issue. Good enough to show the sign and rough size of holding
+   costs, not to price a real book.
